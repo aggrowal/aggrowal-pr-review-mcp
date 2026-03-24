@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execSync } from "child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join, basename } from "path";
 import { tmpdir } from "os";
@@ -62,14 +63,30 @@ describe("runProjectGuard", () => {
     }
   });
 
-  it("fails when project is not configured", () => {
+  it("fails when project is not configured and no remote exists", () => {
     writeConfig({ version: 1, projects: {} }, configPath);
 
     const result = runProjectGuard(repo.path, logger, configPath);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toContain("not configured");
-      expect(result.hint).toContain("configure_project");
+      expect(result.reason).toContain("auto-detection failed");
+    }
+  });
+
+  it("auto-detects from git remote when not explicitly configured", () => {
+    writeConfig({ version: 1, projects: {} }, configPath);
+
+    execSync("git remote add origin https://github.com/org/auto-test.git", {
+      cwd: repo.path,
+      stdio: "pipe",
+    });
+
+    const result = runProjectGuard(repo.path, logger, configPath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.repoUrl).toBe("https://github.com/org/auto-test.git");
+      expect(result.mainBranch).toBe("main");
     }
   });
 

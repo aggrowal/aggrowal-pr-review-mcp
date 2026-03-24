@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type {
+  CreateMessageResult,
+  CreateMessageResultWithTools,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import {
@@ -11,6 +15,7 @@ import {
 import { runProjectGuard } from "./tools/t1-project-guard.js";
 import { runBranchResolver } from "./tools/t2-branch-resolver.js";
 import { runDiffExtractor } from "./tools/t3-diff-extractor.js";
+import { applyTokenBudget } from "./budget/index.js";
 import { detectProjectContext, filterSkills } from "./orchestrator/detect.js";
 import {
   Logger,
@@ -22,11 +27,16 @@ import { buildAssembledPromptWithTelemetry } from "./prompt/assemble.js";
 import {
   executeReview,
   ReviewExecutionError,
+  type SamplingExecutor,
+  type SamplingExecutorRequest,
 } from "./review/execute-review.js";
 import {
   buildPrReviewErrorJson,
+  buildPrReviewErrorJsonFromFields,
   buildPrReviewSuccessJson,
 } from "./review/tool-result.js";
+import { formatReviewAsMarkdown } from "./review/format-markdown.js";
+import { getServerVersion } from "./version.js";
 
 // ---- Logger initialization ----
 
@@ -40,13 +50,15 @@ const logConfig = resolveLogConfig({
   configLogFile: config.logFile,
 });
 const logger = new Logger(logConfig);
+const serverVersion = getServerVersion();
 
 // ---- Server ----
 
 const server = new McpServer(
-  { name: "aggrowal-pr-review-mcp", version: "0.1.0" },
+  { name: "aggrowal-pr-review-mcp", version: serverVersion },
   { capabilities: { logging: {} } },
 );
+const samplingExecutor = createMcpSamplingExecutor();
 
 // ---- Tool: configure_project ----
 
@@ -160,8 +172,14 @@ server.tool(
       .describe(
         "Optional trusted reviewer focus/instructions to include in prompt assembly (max 2000 chars)."
       ),
+    format: z
+      .enum(["json", "markdown"])
+      .default("json")
+      .describe(
+        "Output format. 'json' returns machine-readable JSON. 'markdown' returns a human-readable summary."
+      ),
   },
-  async ({ branch, cwd: cwdArg, reviewInstructions }) => {
+  async ({ branch, cwd: cwdArg, reviewInstructions, format }) => {
     const cwd = cwdArg ?? process.cwd();
     const trustedReviewInstructions =
       reviewInstructions && reviewInstructions.length > 0
@@ -175,13 +193,17 @@ server.tool(
     if (!guard.ok) {
       logger.error(`T1: Project guard failed -- ${guard.reason}`, { hint: guard.hint, detail: guard.detail });
       endT1({ status: "failed" });
-      const detail = guard.detail ? `\n\nDetail: ${guard.detail}` : "";
       return {
         isError: true,
         content: [
           {
             type: "text" as const,
-            text: `PR Review blocked\n\nReason: ${guard.reason}\n\nWhat to do: ${guard.hint}${detail}`,
+            text: buildPrReviewErrorJsonFromFields({
+              code: "project_guard_failed",
+              message: guard.reason,
+              detail: [guard.hint, guard.detail].filter(Boolean).join("\n\n"),
+              retryable: false,
+            }),
           },
         ],
       };
@@ -194,13 +216,19 @@ server.tool(
     if (!branchResult.ok) {
       logger.error(`T2: Branch resolver failed -- ${branchResult.reason}`, { hint: branchResult.hint, detail: branchResult.detail });
       endT2({ status: "failed" });
-      const detail = branchResult.detail ? `\n\nDetail: ${branchResult.detail}` : "";
       return {
         isError: true,
         content: [
           {
             type: "text" as const,
-            text: `Branch resolution failed\n\nReason: ${branchResult.reason}\n\nWhat to do: ${branchResult.hint}${detail}`,
+            text: buildPrReviewErrorJsonFromFields({
+              code: "branch_resolution_failed",
+              message: branchResult.reason,
+              detail: [branchResult.hint, branchResult.detail]
+                .filter(Boolean)
+                .join("\n\n"),
+              retryable: false,
+            }),
           },
         ],
       };
@@ -209,24 +237,67 @@ server.tool(
 
     // T3: Diff extractor
     const endT3 = logger.startStep("T3: Diff extractor");
-    const diffResult = runDiffExtractor(branchResult.context, logger);
+    const diffResult = runDiffExtractor(branchResult.context, logger, {
+      enrichment: config.reviewRuntime.enrichment,
+    });
     if (!diffResult.ok) {
       logger.error(`T3: Diff extractor failed -- ${diffResult.reason}`, { hint: diffResult.hint, detail: diffResult.detail });
       endT3({ status: "failed" });
-      const detail = diffResult.detail ? `\n\nDetail: ${diffResult.detail}` : "";
       return {
         isError: true,
         content: [
           {
             type: "text" as const,
-            text: `Diff extraction failed\n\nReason: ${diffResult.reason}\n\nWhat to do: ${diffResult.hint}${detail}`,
+            text: buildPrReviewErrorJsonFromFields({
+              code: "diff_extraction_failed",
+              message: diffResult.reason,
+              detail: [diffResult.hint, diffResult.detail]
+                .filter(Boolean)
+                .join("\n\n"),
+              retryable: false,
+            }),
           },
         ],
       };
     }
     endT3({ files: diffResult.diff.files.length, additions: diffResult.diff.totalAdditions, deletions: diffResult.diff.totalDeletions });
 
-    const diff = diffResult.diff;
+    // Budget check: enforce file/line limits, estimate token budget
+    const endBudget = logger.startStep("Budget check");
+    const budgetResult = applyTokenBudget(
+      diffResult.diff,
+      SKILL_REGISTRY.length,
+      config.reviewRuntime.tokenBudget,
+      logger
+    );
+    if (!budgetResult.ok) {
+      logger.error(`Budget check failed -- ${budgetResult.reason}`, { hint: budgetResult.hint });
+      endBudget({ status: "failed" });
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text" as const,
+            text: buildPrReviewErrorJsonFromFields({
+              code: "budget_exceeded",
+              message: budgetResult.reason,
+              detail: budgetResult.hint,
+              retryable: false,
+            }),
+          },
+        ],
+      };
+    }
+    if (budgetResult.truncated) {
+      logger.warn("Budget: payload was truncated to fit token budget", {
+        droppedFiles: budgetResult.droppedFiles.length,
+        droppedFullContent: budgetResult.droppedFullContent.length,
+        truncatedDiffs: budgetResult.truncatedDiffs.length,
+      });
+    }
+    endBudget({ truncated: budgetResult.truncated, files: budgetResult.diff.files.length });
+
+    const diff = budgetResult.diff;
 
     // Orchestrator: detect context, filter skills
     const endDetect = logger.startStep("Orchestrator: detect + filter");
@@ -294,6 +365,10 @@ server.tool(
         logger,
         providerConfig: config.reviewRuntime,
         maxRetries: config.reviewRuntime.maxRetries,
+        executionMode: config.reviewRuntime.executionMode,
+        samplingExecutor,
+        samplingIncludeContext: config.reviewRuntime.samplingIncludeContext,
+        samplingModelHint: config.reviewRuntime.samplingModelHint,
       });
 
       logger.execution("complete", {
@@ -313,18 +388,28 @@ server.tool(
       });
 
       logger.info("pr_review: complete");
+      const resultPayload = format === "markdown"
+        ? formatReviewAsMarkdown({
+            review: execution.report,
+            provider: execution.provider,
+            model: execution.model,
+            attempts: execution.attempts,
+            latencyMs: execution.latencyMs,
+            usage: execution.usage,
+          })
+        : buildPrReviewSuccessJson({
+            review: execution.report,
+            provider: execution.provider,
+            model: execution.model,
+            attempts: execution.attempts,
+            latencyMs: execution.latencyMs,
+            usage: execution.usage,
+          });
       return {
         content: [
           {
             type: "text" as const,
-            text: buildPrReviewSuccessJson({
-              review: execution.report,
-              provider: execution.provider,
-              model: execution.model,
-              attempts: execution.attempts,
-              latencyMs: execution.latencyMs,
-              usage: execution.usage,
-            }),
+            text: resultPayload,
           },
         ],
       };
@@ -364,7 +449,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.setMcpServer(server);
-  logger.info("aggrowal-pr-review-mcp v0.1.0 started", {
+  logger.info(`aggrowal-pr-review-mcp v${serverVersion} started`, {
     level: logConfig.level,
     filePath: logConfig.filePath ?? "none",
     sinks: ["stderr", "mcp", ...(logConfig.filePath ? ["file"] : [])],
@@ -375,3 +460,65 @@ main().catch((err) => {
   logger.error("Fatal error during startup", { error: String(err) });
   process.exit(1);
 });
+
+function createMcpSamplingExecutor(): SamplingExecutor {
+  return {
+    async generate(
+      request: SamplingExecutorRequest
+    ): Promise<{
+      provider: string;
+      model: string;
+      text: string;
+    }> {
+      const response = await server.server.createMessage({
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: request.prompt,
+            },
+          },
+        ],
+        systemPrompt: request.systemPrompt,
+        maxTokens: request.maxTokens,
+        temperature: request.temperature,
+        includeContext: request.includeContext,
+        modelPreferences: request.modelHint
+          ? {
+              hints: [{ name: request.modelHint }],
+            }
+          : undefined,
+      });
+
+      const text = extractSamplingText(response);
+      if (!text) {
+        throw new Error(
+          "Sampling response did not include text content in assistant message."
+        );
+      }
+
+      return {
+        provider: "mcp_client_sampling",
+        model: response.model,
+        text,
+      };
+    },
+  };
+}
+
+function extractSamplingText(
+  response: CreateMessageResult | CreateMessageResultWithTools
+): string {
+  const chunks = Array.isArray(response.content)
+    ? response.content
+    : [response.content];
+  return chunks
+    .filter((chunk): chunk is { type: "text"; text: string } => {
+      return chunk.type === "text" && typeof chunk.text === "string";
+    })
+    .map((chunk) => chunk.text.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
