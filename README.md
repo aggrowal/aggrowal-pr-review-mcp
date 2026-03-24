@@ -6,6 +6,7 @@ MCP server for multi-track PR reviews from local git diffs.
 
 ## Documentation
 
+- [Platform setup (Cursor, Claude Code, Windsurf, etc.)](docs/platform-setup.md)
 - [Configuration, modes, and usage](docs/config-modes.md)
 - [Publishing to npm](docs/publishing.md)
 - [Architecture and extendability](docs/architecture.md)

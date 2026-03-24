@@ -27,8 +27,19 @@ export const ReviewRuntimeSchema = z.object({
   enrichment: z
     .object({
       enabled: z.boolean().default(false),
-      provider: z.enum(["git"]).default("git"),
+      provider: z.enum(["git", "github"]).default("git"),
       maxCommits: z.number().int().min(1).max(20).default(5),
+    })
+    .default({}),
+  tokenBudget: z
+    .object({
+      maxPromptChars: z
+        .number()
+        .int()
+        .positive()
+        .default(400_000),
+      maxFiles: z.number().int().positive().default(100),
+      maxTotalLines: z.number().int().positive().default(15_000),
     })
     .default({}),
 });

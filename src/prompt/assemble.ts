@@ -211,6 +211,14 @@ function buildEnrichmentPayload(diff: DiffContext): string {
     );
   }
 
+  if (diff.enrichment.labels && diff.enrichment.labels.length > 0) {
+    sections.push(`- Labels: ${diff.enrichment.labels.map(sanitizePath).join(", ")}`);
+  }
+
+  if (diff.enrichment.prNumber) {
+    sections.push(`- PR number: #${diff.enrichment.prNumber}`);
+  }
+
   if (sections.length === 0) return "";
   return `## Additional PR metadata (untrusted)\n${sections.join("\n")}`;
 }

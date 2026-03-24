@@ -203,7 +203,7 @@ describe("Full pipeline integration", () => {
     expect(ctx.framework).toContain("flask");
   });
 
-  it("returns error for unconfigured project", () => {
+  it("returns error for unconfigured project with no remote", () => {
     const emptyConfigDir = mkdtempSync(join(tmpdir(), "pr-review-empty-cfg-"));
     const emptyConfigPath = join(emptyConfigDir, "config.json");
     writeConfig({ version: 1, projects: {} }, emptyConfigPath);

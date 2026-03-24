@@ -15,6 +15,7 @@ import {
 import { runProjectGuard } from "./tools/t1-project-guard.js";
 import { runBranchResolver } from "./tools/t2-branch-resolver.js";
 import { runDiffExtractor } from "./tools/t3-diff-extractor.js";
+import { applyTokenBudget } from "./budget/index.js";
 import { detectProjectContext, filterSkills } from "./orchestrator/detect.js";
 import {
   Logger,
@@ -34,6 +35,7 @@ import {
   buildPrReviewErrorJsonFromFields,
   buildPrReviewSuccessJson,
 } from "./review/tool-result.js";
+import { formatReviewAsMarkdown } from "./review/format-markdown.js";
 import { getServerVersion } from "./version.js";
 
 // ---- Logger initialization ----
@@ -170,8 +172,14 @@ server.tool(
       .describe(
         "Optional trusted reviewer focus/instructions to include in prompt assembly (max 2000 chars)."
       ),
+    format: z
+      .enum(["json", "markdown"])
+      .default("json")
+      .describe(
+        "Output format. 'json' returns machine-readable JSON. 'markdown' returns a human-readable summary."
+      ),
   },
-  async ({ branch, cwd: cwdArg, reviewInstructions }) => {
+  async ({ branch, cwd: cwdArg, reviewInstructions, format }) => {
     const cwd = cwdArg ?? process.cwd();
     const trustedReviewInstructions =
       reviewInstructions && reviewInstructions.length > 0
@@ -254,7 +262,42 @@ server.tool(
     }
     endT3({ files: diffResult.diff.files.length, additions: diffResult.diff.totalAdditions, deletions: diffResult.diff.totalDeletions });
 
-    const diff = diffResult.diff;
+    // Budget check: enforce file/line limits, estimate token budget
+    const endBudget = logger.startStep("Budget check");
+    const budgetResult = applyTokenBudget(
+      diffResult.diff,
+      SKILL_REGISTRY.length,
+      config.reviewRuntime.tokenBudget,
+      logger
+    );
+    if (!budgetResult.ok) {
+      logger.error(`Budget check failed -- ${budgetResult.reason}`, { hint: budgetResult.hint });
+      endBudget({ status: "failed" });
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text" as const,
+            text: buildPrReviewErrorJsonFromFields({
+              code: "budget_exceeded",
+              message: budgetResult.reason,
+              detail: budgetResult.hint,
+              retryable: false,
+            }),
+          },
+        ],
+      };
+    }
+    if (budgetResult.truncated) {
+      logger.warn("Budget: payload was truncated to fit token budget", {
+        droppedFiles: budgetResult.droppedFiles.length,
+        droppedFullContent: budgetResult.droppedFullContent.length,
+        truncatedDiffs: budgetResult.truncatedDiffs.length,
+      });
+    }
+    endBudget({ truncated: budgetResult.truncated, files: budgetResult.diff.files.length });
+
+    const diff = budgetResult.diff;
 
     // Orchestrator: detect context, filter skills
     const endDetect = logger.startStep("Orchestrator: detect + filter");
@@ -345,18 +388,28 @@ server.tool(
       });
 
       logger.info("pr_review: complete");
+      const resultPayload = format === "markdown"
+        ? formatReviewAsMarkdown({
+            review: execution.report,
+            provider: execution.provider,
+            model: execution.model,
+            attempts: execution.attempts,
+            latencyMs: execution.latencyMs,
+            usage: execution.usage,
+          })
+        : buildPrReviewSuccessJson({
+            review: execution.report,
+            provider: execution.provider,
+            model: execution.model,
+            attempts: execution.attempts,
+            latencyMs: execution.latencyMs,
+            usage: execution.usage,
+          });
       return {
         content: [
           {
             type: "text" as const,
-            text: buildPrReviewSuccessJson({
-              review: execution.report,
-              provider: execution.provider,
-              model: execution.model,
-              attempts: execution.attempts,
-              latencyMs: execution.latencyMs,
-              usage: execution.usage,
-            }),
+            text: resultPayload,
           },
         ],
       };

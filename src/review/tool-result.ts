@@ -7,6 +7,7 @@ export type PrReviewToolErrorCode =
   | "project_guard_failed"
   | "branch_resolution_failed"
   | "diff_extraction_failed"
+  | "budget_exceeded"
   | "provider_error"
   | "invalid_output"
   | "schema_invalid"
