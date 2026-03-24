@@ -357,14 +357,69 @@ async function generateReviewResponse(params: {
       if (!shouldFallbackFromSampling(error)) {
         throw error;
       }
+      const samplingFailureDetail = samplingErrorDetail(error);
       options.logger.warn(
         "Sampling unavailable; falling back to provider API execution",
-        { detail: samplingErrorDetail(error) }
+        { detail: samplingFailureDetail }
       );
+      return runProviderRequestWithFallbackAuthHandling({
+        executionPrompt,
+        getProvider,
+        getProviderConfig,
+        samplingFailureDetail,
+      });
     }
   }
 
   return runProviderRequest(executionPrompt, getProvider(), getProviderConfig());
+}
+
+async function runProviderRequestWithFallbackAuthHandling(params: {
+  executionPrompt: string;
+  getProvider: () => LlmProvider;
+  getProviderConfig: () => LlmProviderConfig;
+  samplingFailureDetail: string;
+}): Promise<SamplingExecutorResult> {
+  const {
+    executionPrompt,
+    getProvider,
+    getProviderConfig,
+    samplingFailureDetail,
+  } = params;
+
+  try {
+    return await runProviderRequest(
+      executionPrompt,
+      getProvider(),
+      getProviderConfig()
+    );
+  } catch (error) {
+    if (
+      error instanceof LlmProviderError &&
+      error.code === "auth_missing"
+    ) {
+      const provider = getProviderConfig().provider;
+      const missingEnvVar =
+        provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+
+      throw new ReviewExecutionError(
+        "sampling_unavailable",
+        "Client sampling is unavailable and provider fallback is not configured.",
+        {
+          detail: [
+            `Sampling failure detail: ${samplingFailureDetail}`,
+            `Fallback provider: ${provider}`,
+            `Missing environment variable: ${missingEnvVar}`,
+            'To stay keyless, keep executionMode at "client_sampling".',
+            `To use provider fallback (auto) or direct provider mode, set ${missingEnvVar} in MCP server env and retry.`,
+          ].join("\n"),
+          retryable: false,
+        }
+      );
+    }
+
+    throw error;
+  }
 }
 
 async function runSamplingRequest(
