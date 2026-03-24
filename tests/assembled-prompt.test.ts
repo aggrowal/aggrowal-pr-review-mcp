@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { buildAssembledPrompt } from "../src/prompt/assemble.js";
+import {
+  buildAssembledPrompt,
+  buildAssembledPromptWithTelemetry,
+} from "../src/prompt/assemble.js";
 import { SKILL_REGISTRY } from "../src/skills/registry.js";
 import type { DetectedContext, DiffContext, SkillMetadata } from "../src/types.js";
 
@@ -56,6 +59,30 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
+function makeAddedDiff(): DiffContext {
+  return {
+    projectName: "demo",
+    repoRoot: "/tmp/demo",
+    baseBranch: "main",
+    headBranch: "feature/new-file",
+    repoUrl: "https://github.com/org/demo",
+    files: [
+      {
+        path: "src/new.ts",
+        status: "added",
+        additions: 3,
+        deletions: 0,
+        diff: ["@@ -0,0 +1,3 @@", "+export const x = 1;", "+export const y = 2;"].join(
+          "\n"
+        ),
+        content: ["export const x = 1;", "export const y = 2;"].join("\n"),
+      },
+    ],
+    totalAdditions: 3,
+    totalDeletions: 0,
+  };
+}
+
 describe("buildAssembledPrompt", () => {
   it("builds a shared payload once and preserves track order", () => {
     const diff = makeDiff();
@@ -98,5 +125,52 @@ describe("buildAssembledPrompt", () => {
     expect(prompt).toContain("<<_UNTRUSTED_DIFF_END_>>");
     expect(countOccurrences(prompt, "<<<UNTRUSTED_DIFF_BEGIN>>>")).toBe(4);
     expect(countOccurrences(prompt, "<<<UNTRUSTED_DIFF_END>>>")).toBe(4);
+  });
+
+  it("injects track execution contract and report schema requirements", () => {
+    const diff = makeDiff();
+    const ctx = makeContext();
+    const matched: SkillMetadata[] = SKILL_REGISTRY.filter((s) =>
+      ["correctness", "testing-quality"].includes(s.metadata.id)
+    ).map((s) => s.metadata);
+
+    const prompt = buildAssembledPrompt(diff, ctx, matched, []);
+
+    expect(prompt).toContain("## Track execution contract");
+    expect(prompt).toContain("### correctness");
+    expect(prompt).toContain("### testing-quality");
+    expect(prompt).toContain(
+      "Allowed status values: blocker | needs_improvement | nudge | looks_good."
+    );
+    expect(prompt).toContain("#### Track Coverage");
+    expect(prompt).toContain("all pointers are positive");
+  });
+
+  it("omits redundant full-file payload for added files", () => {
+    const prompt = buildAssembledPrompt(makeAddedDiff(), makeContext(), [], []);
+
+    expect(prompt).toContain("### src/new.ts (added, +3/-0)");
+    expect(prompt).toContain("#### Diff");
+    expect(prompt).not.toContain("#### Full file");
+  });
+
+  it("returns prompt telemetry and parseable track contracts", () => {
+    const diff = makeDiff();
+    const ctx = makeContext();
+    const matched: SkillMetadata[] = SKILL_REGISTRY.filter((s) =>
+      ["correctness", "redundancy"].includes(s.metadata.id)
+    ).map((s) => s.metadata);
+
+    const result = buildAssembledPromptWithTelemetry(diff, ctx, matched, []);
+
+    expect(result.prompt.length).toBe(result.telemetry.totalChars);
+    expect(result.telemetry.payloadChars).toBeGreaterThan(0);
+    expect(result.telemetry.trackChars).toBeGreaterThan(0);
+    expect(result.telemetry.staticChars).toBeGreaterThan(0);
+    expect(result.telemetry.headingCount).toBeGreaterThan(0);
+    expect(result.telemetry.subpointCount).toBeGreaterThan(0);
+    expect(result.trackContracts).toHaveLength(2);
+    expect(result.trackContracts[0].headings[0].id).toBe("A");
+    expect(result.trackContracts[0].headings[0].subpoints.length).toBeGreaterThan(0);
   });
 });

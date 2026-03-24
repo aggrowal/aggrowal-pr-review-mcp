@@ -34,6 +34,46 @@ function makeContext(): DetectedContext {
   };
 }
 
+function parsePromptHeadingsAndChecks(prompt: string): {
+  headingCount: number;
+  headingsWithoutChecks: string[];
+  checkCount: number;
+} {
+  const lines = prompt.split("\n");
+  const headingCheckCounts = new Map<string, number>();
+  let currentHeading: string | null = null;
+  let checkCount = 0;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const headingMatch = /^###\s+([A-Z])\.\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      currentHeading = `${headingMatch[1]}. ${headingMatch[2]}`;
+      headingCheckCounts.set(currentHeading, 0);
+      continue;
+    }
+
+    const checkMatch = /^([0-9]+)\.\s+/.exec(line);
+    if (checkMatch && currentHeading) {
+      headingCheckCounts.set(
+        currentHeading,
+        (headingCheckCounts.get(currentHeading) ?? 0) + 1
+      );
+      checkCount += 1;
+    }
+  }
+
+  const headingsWithoutChecks = [...headingCheckCounts.entries()]
+    .filter(([, count]) => count === 0)
+    .map(([heading]) => heading);
+
+  return {
+    headingCount: headingCheckCounts.size,
+    headingsWithoutChecks,
+    checkCount,
+  };
+}
+
 describe("skill prompt contract", () => {
   it("registers the expected 10 review tracks", () => {
     const ids = SKILL_REGISTRY.map((s) => s.metadata.id);
@@ -65,6 +105,20 @@ describe("skill prompt contract", () => {
       expect(prompt).not.toContain("## Diff");
       expect(prompt).not.toContain("#### Diff");
       expect(prompt).not.toContain("src/api/users.ts");
+    }
+  });
+
+  it("ensures each skill prompt is parseable into headings and numbered checks", () => {
+    const diff = makeDiff();
+    const ctx = makeContext();
+
+    for (const skill of SKILL_REGISTRY) {
+      const prompt = skill.buildPrompt(diff, ctx);
+      const parsed = parsePromptHeadingsAndChecks(prompt);
+
+      expect(parsed.headingCount).toBeGreaterThan(0);
+      expect(parsed.checkCount).toBeGreaterThan(0);
+      expect(parsed.headingsWithoutChecks).toEqual([]);
     }
   });
 });

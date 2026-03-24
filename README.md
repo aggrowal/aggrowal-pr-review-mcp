@@ -16,8 +16,37 @@ Skill filter            each skill declares requirements; non-matches skipped
   |
 Assembled prompt        context + shared changed-file payload + matched tracks
   |
-Final report            APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION + findings
+Final report            verdict + per-track coverage + heading-level statuses
 ```
+
+## Review contract enforcement
+
+The server now assembles an explicit execution contract for matched tracks so the final report can cover every heading/sub-point consistently.
+
+- **Track execution contract (server-generated):** For each `## TRACK`, the assembler extracts:
+  - heading ids/titles from `### A. Heading`
+  - numbered sub-points from `1.`, `2.`, ...
+  - compact sub-point ranges for report guidance
+- **Required final report coverage:** The output contract requires a `Track Coverage` section with:
+  - each executed track
+  - per-heading status (`blocker | needs_improvement | nudge | looks_good`)
+  - passed/failed sub-point ids
+  - reason when any sub-point fails
+  - explicit `"all pointers are positive"` when no sub-point fails
+- **Verdict guidance:** Statuses map to `APPROVE` / `NEEDS_DISCUSSION` / `REQUEST_CHANGES` rules in the final report instructions.
+
+Important architecture note: this MCP server does not receive the model's generated report back. Enforcement is therefore prompt-contract driven, with server logs providing expected-execution telemetry.
+
+## Token efficiency strategy
+
+Token reduction is applied without dropping review context:
+
+- **Single-call flow:** Keep one `pr_review` call; avoid extra validation/tool round-trips.
+- **Shared payload once:** Changed files payload is injected once and shared across all tracks.
+- **Track prompt compaction:** Repeated per-track intro boilerplate is removed at assembly time; checklists and rules remain intact.
+- **Lossless payload dedupe:** For `added` files, avoid duplicating `Full file` when diff already contains full content.
+- **Concise instruction language:** Server-side guidance is written in short, direct language to reduce token overhead.
+- **Prompt telemetry:** Assembly logs emit `static`, `payload`, `tracks`, and `total` char counts.
 
 ## Setup
 
@@ -125,6 +154,17 @@ export const SKILL_REGISTRY: SkillModule[] = [
 
 The orchestrator automatically includes or skips it based on detected language/framework/patterns.
 
+### Skill prompt format contract (must keep)
+
+To preserve track parsing and coverage reporting, each skill prompt must keep this structure:
+
+- `## What to check`
+- Heading lines in `### <Letter>. <Title>` format (for example, `### A. Boundary Safety`)
+- Numbered checks under each heading (`1.`, `2.`, ...)
+- `## Rules`
+
+If this format changes, update parser logic in `src/prompt/assemble.ts` and related tests.
+
 ## Config file
 
 Lives at `~/.pr-review-mcp/config.json`. You can edit it directly:
@@ -163,8 +203,8 @@ The server writes structured logs to help trace what is happening at every step.
 |---|---|
 | `error` | Step failures with full context: the git command that failed, its stderr output, config state. Always shown. |
 | `warn` | Recoverable issues: file content read fallbacks, numstat failures, fuzzy branch match attempts. |
-| `info` (default) | Progress indicators: each pipeline step with timing, detection summaries, skill matching counts, assembly stats. Tells you the session is moving and what it did. |
-| `debug` | Everything above plus raw git commands and output, per-file processing, detection scoring, skill filter reasoning per skill, full input and output of each function. |
+| `info` (default) | Progress indicators: each pipeline step with timing, detection summaries, selected/skipped skills, assembly coverage counts, and prompt-size telemetry. |
+| `debug` | Everything above plus raw git commands and output, per-file processing, detection scoring, per-skill filter reasoning, and contract detail previews. |
 
 ### Configuration
 
@@ -231,12 +271,15 @@ At `info` level, a typical review run produces:
 [2025-03-23T10:15:31.800Z] [INFO] T3: Diff extractor [498ms]
 [2025-03-23T10:15:31.810Z] [INFO] Detected: language=typescript, frameworks=[react], patterns=[rest-api, auth]
 [2025-03-23T10:15:31.811Z] [INFO] Skills: 3 matched, 0 skipped
+[2025-03-23T10:15:31.812Z] [INFO] Skills selected: correctness, security-generic, testing-quality
 [2025-03-23T10:15:31.820Z] [INFO] Orchestrator: detect + filter [18ms]
+[2025-03-23T10:15:31.821Z] [INFO] Assembly coverage contract: tracks=3, headings=18, subpoints=60
+[2025-03-23T10:15:31.821Z] [INFO] Assembly prompt size: total=48312, static=4121, payload=38320, tracks=9871
 [2025-03-23T10:15:31.821Z] [INFO] Assembly [1ms]
 [2025-03-23T10:15:31.822Z] [INFO] pr_review: complete
 ```
 
-At `debug` level, each step additionally logs git commands, raw output, detection scoring, and per-skill filter reasoning.
+At `debug` level, each step additionally logs git commands, raw output, detection scoring, per-skill filter reasoning, and coverage-contract previews.
 
 ## Skill registry
 
@@ -264,9 +307,9 @@ npm start         # start the MCP server
 
 ## Architecture
 
-The server is purely deterministic -- it makes zero model calls. It gathers context via local git commands, detects the project stack through heuristics, filters relevant skills, and assembles a single structured prompt. The assembled prompt includes one shared changed-file payload section and multiple checklist-focused skill tracks. The IDE's model executes the tracks and produces the final report.
+The server is purely deterministic -- it makes zero model calls. It gathers context via local git commands, detects the project stack through heuristics, filters relevant skills, and assembles a single structured prompt. The assembled prompt includes one shared changed-file payload section, checklist-focused skill tracks, a generated track execution contract, and explicit final-report requirements.
 
-This design sends changed-file payload once for all tracks, reducing redundant prompt tokens as track count grows.
+This design sends changed-file payload once for all tracks, reducing redundant prompt tokens as track count grows, while preserving enough structure for consistent per-track reporting.
 
 ### Prompt-injection hardening
 
@@ -276,3 +319,21 @@ Diff content is untrusted -- a malicious PR could contain text designed to overr
 - **Sentinel-collision escaping** so diff content cannot break out of the untrusted region.
 - **Explicit trust boundary preamble** instructing the model to ignore any instructions, role changes, or "ignore previous" directives appearing inside untrusted regions.
 - **Path sanitization** stripping control characters from file paths before interpolating them into the prompt structure.
+
+## Future change checklist
+
+When modifying prompt assembly, skills, or reporting behavior, keep these invariants:
+
+1. **Coverage contract integrity**
+   - Every matched track should appear in `Track execution contract`.
+   - Final report instructions must require per-track/per-heading status and failure reasoning.
+2. **Skill parseability**
+   - Skills must keep `### Letter. Heading` + numbered checks for parser compatibility.
+3. **Token discipline**
+   - Prefer concise wording and dedupe over dropping context.
+   - Re-check prompt-size telemetry after major prompt changes.
+4. **Safety boundary integrity**
+   - Preserve trusted/untrusted sentinel model and path sanitization.
+5. **Verification**
+   - Run `npm test` and `npm run build`.
+   - Ensure prompt-related tests pass (`assembled-prompt`, `skills-contract`, `prompt-assembly`).

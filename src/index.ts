@@ -18,7 +18,7 @@ import {
   resolveLogConfig,
 } from "./logger.js";
 import { SKILL_REGISTRY } from "./skills/registry.js";
-import { buildAssembledPrompt } from "./prompt/assemble.js";
+import { buildAssembledPromptWithTelemetry } from "./prompt/assemble.js";
 
 // ---- Logger initialization ----
 
@@ -216,17 +216,53 @@ server.tool(
       SKILL_REGISTRY.map((s) => s.metadata),
       logger
     );
+    logger.info(
+      `Skills selected: ${matched.map((skill) => skill.id).join(", ") || "none"}`
+    );
+    if (skipped.length > 0) {
+      logger.info(
+        `Skills skipped: ${skipped
+          .map((entry) => `${entry.skill.id} (${entry.reason})`)
+          .join("; ")}`
+      );
+    }
     endDetect({ language: detectedCtx.language, frameworks: detectedCtx.framework, patterns: detectedCtx.patterns, matched: matched.length, skipped: skipped.length });
 
     // Assembly
     const endAssembly = logger.startStep("Assembly");
-    const assembledPrompt = buildAssembledPrompt(
+    const assembled = buildAssembledPromptWithTelemetry(
       diff,
       detectedCtx,
       matched,
       skipped
     );
-    endAssembly({ skills: matched.length, promptChars: assembledPrompt.length });
+    const assembledPrompt = assembled.prompt;
+    const telemetry = assembled.telemetry;
+    const contractPreview = assembled.trackContracts
+      .map((track) =>
+        `${track.trackId}[${track.headings
+          .map((heading) => `${heading.id}:${heading.subpoints.length}`)
+          .join(",")}]`
+      )
+      .join(" | ");
+
+    logger.info(
+      `Assembly coverage contract: tracks=${telemetry.matchedTrackCount}, headings=${telemetry.headingCount}, subpoints=${telemetry.subpointCount}`
+    );
+    logger.info(
+      `Assembly prompt size: total=${telemetry.totalChars}, static=${telemetry.staticChars}, payload=${telemetry.payloadChars}, tracks=${telemetry.trackChars}`
+    );
+    logger.debug("Assembly contract details", { contract: contractPreview });
+
+    endAssembly({
+      skills: matched.length,
+      promptChars: telemetry.totalChars,
+      staticChars: telemetry.staticChars,
+      payloadChars: telemetry.payloadChars,
+      trackChars: telemetry.trackChars,
+      headings: telemetry.headingCount,
+      subpoints: telemetry.subpointCount,
+    });
 
     logger.info("pr_review: complete");
 

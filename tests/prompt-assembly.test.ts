@@ -16,6 +16,7 @@ import { runDiffExtractor } from "../src/tools/t3-diff-extractor.js";
 import { detectProjectContext, filterSkills } from "../src/orchestrator/detect.js";
 import { createNullLogger } from "../src/logger.js";
 import { SKILL_REGISTRY } from "../src/skills/registry.js";
+import { buildAssembledPrompt } from "../src/prompt/assemble.js";
 const logger = createNullLogger();
 
 let repo: MockRepo;
@@ -109,6 +110,12 @@ describe("Full pipeline integration", () => {
     expect(matched).toHaveLength(9);
     expect(skipped).toHaveLength(1);
     expect(skipped[0].skill.id).toBe("accessibility-i18n");
+
+    const assembledPrompt = buildAssembledPrompt(diff, ctx, matched, skipped);
+    expect(assembledPrompt).toContain("## Track execution contract");
+    expect(assembledPrompt).toContain("### correctness");
+    expect(assembledPrompt).toContain("#### Track Coverage");
+    expect(assembledPrompt).toContain("all pointers are positive");
 
     // Build prompt for each matched skill, keyed by id for position-independence
     const promptMap = new Map<string, string>();
