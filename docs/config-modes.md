@@ -18,9 +18,7 @@ Attach in an MCP client (Cursor/Claude-style shape):
     "pr-review": {
       "command": "npx",
       "args": ["-y", "aggrowal-pr-review-mcp"],
-      "env": {
-        "ANTHROPIC_API_KEY": "your-anthropic-key"
-      }
+      "env": {}
     }
   }
 }
@@ -29,7 +27,7 @@ Attach in an MCP client (Cursor/Claude-style shape):
 Notes:
 
 - Use package name `aggrowal-pr-review-mcp` (not `pr-review-mcp`).
-- MCP hosts do not always inherit your shell environment. Put required env vars in MCP config.
+- MCP hosts do not always inherit your shell environment. Put provider env vars in MCP config when using `provider_api` or `auto` fallback (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`).
 
 ## Configure and use
 
@@ -54,7 +52,8 @@ Run review:
 
 ## Tool output shape
 
-`pr_review` returns JSON only.
+`pr_review` defaults to JSON output (`format: "json"`).
+Set `format: "markdown"` when you want a human-readable summary in chat.
 
 Success:
 
@@ -86,26 +85,27 @@ Runtime configuration lives in `~/.pr-review-mcp/config.json` under `reviewRunti
 
 | Mode | What happens | Best for |
 |---|---|---|
-| `auto` (default) | Try MCP client sampling first; fallback to provider API if sampling unavailable. | Mixed-client environments; safest default. |
-| `client_sampling` | Use model from host/client chat context only. | Local/host-managed model execution, no direct provider token dependency. |
+| `client_sampling` (default) | Use model from host/client chat context only. | Chat-first/keyless IDE usage. |
+| `auto` | Try MCP client sampling first; fallback to provider API if sampling is unavailable. | Mixed-client environments with configured provider fallback. |
 | `provider_api` | Call Anthropic/OpenAI directly from server. | Strict provider control or clients without sampling support. |
 
 ## Local LLM (IDE context) vs token mode
 
 ### IDE/chat-window context path
 
-- Set `executionMode` to `client_sampling` (or keep `auto`).
+- Keep default `executionMode: "client_sampling"` (or set it explicitly).
 - Server sends `sampling/createMessage` to the client.
 - Client chooses model from its active context (including local model backends when supported).
 - No provider API token required for this path.
+- `auto` is optional and only needed when you want provider fallback behavior.
 
 ### Token/API path
 
-- Set `executionMode` to `provider_api` (or keep `auto` with fallback enabled).
+- Set `executionMode` to `provider_api` (or use `auto` with fallback enabled).
 - Configure `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in MCP `env`.
 - Server calls provider API directly.
 
-Recommended production stance: keep `auto` and configure provider keys to ensure fallback continuity.
+In `auto`, fallback is attempted only when sampling errors are classified as unavailable (for example, missing sampling capability/method).
 
 ## Full config reference
 
@@ -129,7 +129,7 @@ Example:
     "maxRetries": 1,
     "maxOutputTokens": 4096,
     "temperature": 0,
-    "executionMode": "auto",
+    "executionMode": "client_sampling",
     "samplingIncludeContext": "none",
     "samplingModelHint": "claude",
     "enrichment": {
@@ -151,11 +151,11 @@ Field summary:
 | `maxRetries` | `0..3` | `1` | Retry attempts for invalid/retryable outcomes. |
 | `maxOutputTokens` | `number` | provider default | Output size guard. |
 | `temperature` | `0..1` | provider default | Generation variability. |
-| `executionMode` | `auto \| client_sampling \| provider_api` | `auto` | Execution routing. |
+| `executionMode` | `auto \| client_sampling \| provider_api` | `client_sampling` | Execution routing. |
 | `samplingIncludeContext` | `none \| thisServer \| allServers` | `none` | Sampling context scope hint. |
 | `samplingModelHint` | `string` | unset | Sampling model preference hint. |
 | `enrichment.enabled` | `boolean` | `false` | Enable optional metadata enrichment. |
-| `enrichment.provider` | `git` | `git` | Current enrichment backend. |
+| `enrichment.provider` | `git \| github` | `git` | Current enrichment backend. |
 | `enrichment.maxCommits` | `1..20` | `5` | Commit scan cap for enrichment. |
 
 ## Logging and debugging
@@ -197,5 +197,5 @@ Per-client checklist:
 2. Verify `list_projects` succeeds.
 3. Run `configure_project` inside target repo.
 4. Run `@pr_review branch: <valid-branch>`.
-5. Validate JSON output + progress logs.
+5. Validate expected output format (`json` default, optional `markdown`) + progress logs.
 

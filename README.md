@@ -27,13 +27,15 @@ npx -y aggrowal-pr-review-mcp
     "pr-review": {
       "command": "npx",
       "args": ["-y", "aggrowal-pr-review-mcp"],
-      "env": {
-        "ANTHROPIC_API_KEY": "your-anthropic-key"
-      }
+      "env": {}
     }
   }
 }
 ```
+
+Default runtime is `client_sampling` (chat-host model path), so provider API keys are optional.
+If you want provider fallback (`auto`) or direct provider mode (`provider_api`), set
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in MCP `env` (and optionally `PR_REVIEW_PROVIDER=openai`).
 
 3. Configure project once:
 
@@ -48,9 +50,10 @@ configure_project
 
 ```text
 @pr_review branch: feature/my-branch
+@pr_review branch: feature/my-branch format: markdown
 ```
 
-The server emits progress logs during execution (`T1`, `T2`, `T3`, detection, assembly, execution) and returns machine-readable JSON.
+The server emits progress logs during execution (`T1`, `T2`, `T3`, detection, assembly, execution) and returns machine-readable JSON by default (`format: json`) or readable markdown (`format: markdown`).
 
 ## Review contract enforcement
 

@@ -30,7 +30,7 @@ describe("readConfig", () => {
     expect(config.reviewRuntime.provider).toBe("anthropic");
     expect(config.reviewRuntime.timeoutMs).toBe(45000);
     expect(config.reviewRuntime.maxRetries).toBe(1);
-    expect(config.reviewRuntime.executionMode).toBe("auto");
+    expect(config.reviewRuntime.executionMode).toBe("client_sampling");
     expect(config.reviewRuntime.samplingIncludeContext).toBe("none");
     expect(config.reviewRuntime.enrichment.enabled).toBe(false);
   });

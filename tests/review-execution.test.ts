@@ -239,4 +239,58 @@ describe("executeReview", () => {
     expect(samplingExecutor.calls).toHaveLength(1);
     expect(provider.calls).toHaveLength(1);
   });
+
+  it("returns actionable sampling_unavailable guidance when auto fallback lacks provider credentials", async () => {
+    const samplingExecutor = new MockSamplingExecutor([
+      new Error("Method not found: sampling/createMessage"),
+    ]);
+    const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    const originalProvider = process.env.PR_REVIEW_PROVIDER;
+
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.PR_REVIEW_PROVIDER;
+
+    try {
+      await executeReview({
+        assembledPrompt: "Assembled prompt body",
+        trackContracts: makeTrackContracts(),
+        logger: createNullLogger(),
+        executionMode: "auto",
+        samplingExecutor,
+        providerConfig: {
+          provider: "anthropic",
+        },
+      });
+      throw new Error("Expected executeReview to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExecutionError);
+      if (error instanceof ReviewExecutionError) {
+        expect(error.code).toBe("sampling_unavailable");
+        expect(error.retryable).toBe(false);
+        expect(error.detail).toContain("Sampling failure detail");
+        expect(error.detail).toContain("ANTHROPIC_API_KEY");
+        expect(error.detail).toContain('executionMode at "client_sampling"');
+      }
+    } finally {
+      if (originalAnthropicKey === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+      }
+
+      if (originalOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiKey;
+      }
+
+      if (originalProvider === undefined) {
+        delete process.env.PR_REVIEW_PROVIDER;
+      } else {
+        process.env.PR_REVIEW_PROVIDER = originalProvider;
+      }
+    }
+  });
 });

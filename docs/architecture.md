@@ -15,7 +15,7 @@ route -->|client_sampling| hostModel[HostClientModel]
 route -->|provider_api_or_fallback| providerModel[AnthropicOrOpenAI]
 hostModel --> validate[SchemaAndContractValidation]
 providerModel --> validate
-validate --> output[JSONToolResponse]
+validate --> output[ToolOutputJsonOrMarkdown]
 mcpServer --> logs[ProgressAndTelemetryLogs]
 ```
 
@@ -28,7 +28,7 @@ mcpServer --> logs[ProgressAndTelemetryLogs]
 5. Prompt assembler composes trusted instructions + untrusted payload.
 6. Execution router selects `client_sampling`, `provider_api`, or fallback path.
 7. Validator enforces schema + track coverage + verdict consistency.
-8. Tool returns machine-readable JSON result.
+8. Tool returns machine-readable JSON by default, or markdown when `format: "markdown"` is requested.
 
 ## Review contract enforcement
 
@@ -69,7 +69,7 @@ The review payload is split into trusted and untrusted regions:
 
 Runtime modes:
 
-- `client_sampling`: ask MCP host to execute against host-selected model context
+- `client_sampling` (default): ask MCP host to execute against host-selected model context
 - `provider_api`: execute directly against Anthropic/OpenAI
 - `auto`: sampling first, provider fallback if sampling unsupported
 
@@ -123,6 +123,6 @@ The project deliberately combines deterministic preprocessing with bounded model
 
 - Deterministic phases make behavior observable, testable, and debuggable.
 - Model phase is constrained by contracts and retries.
-- Final output is always machine-readable JSON suitable for tooling integrations.
+- Final output defaults to machine-readable JSON (with optional markdown presentation format).
 - Logging at each stage makes long-running review calls transparent to users.
 

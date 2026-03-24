@@ -19,7 +19,7 @@ export const ReviewRuntimeSchema = z.object({
   temperature: z.number().min(0).max(1).optional(),
   executionMode: z
     .enum(["auto", "provider_api", "client_sampling"])
-    .default("auto"),
+    .default("client_sampling"),
   samplingIncludeContext: z
     .enum(["none", "thisServer", "allServers"])
     .default("none"),

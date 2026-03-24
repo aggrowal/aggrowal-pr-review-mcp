@@ -8,17 +8,18 @@ The server supports three execution modes that determine how the LLM review call
 
 | Mode | Behavior | When to use |
 |------|----------|-------------|
-| `auto` (default) | Tries MCP sampling (host model) first, falls back to provider API | Most setups |
-| `client_sampling` | Forces use of the host's model via MCP sampling protocol | When you always want the host model |
+| `client_sampling` (default) | Forces use of the host's model via MCP sampling protocol | Chat-first/keyless operation in IDE clients |
+| `auto` | Tries MCP sampling (host model) first, falls back to provider API when sampling is unavailable | Mixed-client environments where you want continuity |
 | `provider_api` | Forces a direct Anthropic/OpenAI API call | When the host does not support sampling |
 
-With `auto` or `client_sampling`, the review uses the model already available in your chat context -- no separate API key is needed (unless the host does not support sampling, in which case the fallback requires one).
+With default `client_sampling`, the review uses the model already available in your chat context and does not require provider API keys.
+If you opt into `auto`, sampling is attempted first, and provider fallback requires `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
 ---
 
 ## Cursor
 
-Cursor supports MCP sampling, so the default `auto` mode will use your active Cursor model for the review.
+Cursor supports MCP sampling, so the default `client_sampling` mode uses your active Cursor model for the review.
 
 ### Configuration
 
@@ -36,7 +37,7 @@ Create or edit `.cursor/mcp.json` in your project root (or your global Cursor co
 }
 ```
 
-If you want a provider API fallback (recommended), add the API key:
+If you want provider fallback, set `executionMode` to `auto` and add an API key:
 
 ```json
 {
@@ -106,7 +107,7 @@ In a Claude Code session:
 use pr_review with branch: feature/my-branch
 ```
 
-Claude Code uses its own model context for sampling. The `auto` execution mode works out of the box.
+Claude Code uses its own model context for sampling. The default `client_sampling` mode works out of the box.
 
 ---
 
@@ -134,9 +135,9 @@ Add to your Windsurf MCP configuration (typically `~/.windsurf/mcp.json` or proj
 
 ---
 
-## Generic MCP Client (provider API mode)
+## Generic MCP Client (non-sampling hosts)
 
-For MCP hosts that do not support the `createMessage` sampling protocol, configure the server to use direct provider API calls:
+For MCP hosts that do not support the `createMessage` sampling protocol, use direct provider API calls:
 
 ### Configuration
 
@@ -166,7 +167,8 @@ PR_REVIEW_PROVIDER=openai
 }
 ```
 
-Setting `executionMode` to `provider_api` skips the sampling attempt and goes directly to the configured provider API.
+`executionMode: "provider_api"` skips sampling and always uses the configured provider API.
+If you prefer `auto` for mixed environments, keep provider keys configured so fallback can run when sampling is unavailable.
 
 ---
 
