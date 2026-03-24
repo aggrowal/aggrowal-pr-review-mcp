@@ -14,7 +14,7 @@ T3 -- Diff extractor    git diff via local git (merge-base strategy)
 Orchestrator            detects language / frameworks / patterns from diff
 Skill filter            each skill declares requirements; non-matches skipped
   |
-Assembled prompt        context + matched skill tracks sent to model
+Assembled prompt        context + shared changed-file payload + matched tracks
   |
 Final report            APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION + findings
 ```
@@ -99,21 +99,28 @@ export const metadata: SkillMetadata = {
   produces: "my-track",
 };
 
-export function buildPrompt(diff: DiffContext, ctx: DetectedContext): string {
-  const fileDiffs = diff.files
-    .filter((f) => f.status !== "deleted")
-    .map((f) => `### ${f.path}\n\`\`\`\n${f.diff}\n\`\`\``)
-    .join("\n\n");
+export function buildPrompt(_diff: DiffContext, ctx: DetectedContext): string {
+  return `Review code in a ${ctx.language} project for [your concern].
+Use the shared changed-files payload provided by the parent prompt.
 
-  return `Review this diff for [your concern]...\n\n${fileDiffs}`;
+## What to check
+1. ...
+2. ...
+
+## Rules
+- ...
+`;
 }
 ```
 
-3. Register it in `src/index.ts`:
+3. Register it in `src/skills/registry.ts`:
 
 ```typescript
 import * as mySkill from "./skills/my-skill/index.js";
-const SKILL_REGISTRY: SkillModule[] = [correctness, securityGeneric, redundancy, mySkill];
+export const SKILL_REGISTRY: SkillModule[] = [
+  // ...
+  mySkill,
+];
 ```
 
 The orchestrator automatically includes or skips it based on detected language/framework/patterns.
@@ -235,9 +242,16 @@ At `debug` level, each step additionally logs git commands, raw output, detectio
 
 | Skill | Runs on | Checks for |
 |---|---|---|
-| `correctness` | all languages | practical checklist for contract/invariant bugs, data integrity and atomicity issues, failure semantics, async ordering, idempotency/time logic, boundary/numeric/unit errors, API schema/shape drift, and resource cleanup/invalidation correctness. Prioritizes concrete reproducible failure scenarios over style feedback. |
-| `security-generic` | all languages | 36-point checklist: secrets & data exposure, auth/authz (BOLA, BOPLA, function-level, cross-tenant), session/token handling, injection (SQL, NoSQL, command, template, XSS, CRLF), SSRF, path traversal, file upload, crypto, deserialization/XXE, resource lifecycle (connection leaks, unbounded allocation, fail-open), config/supply-chain. Backed by OWASP Top 10, API Top 10, ASVS 5.0, and CWE Top 25. |
-| `redundancy` | all languages | duplication, dead code, unused imports, over-engineering |
+| `correctness` | all languages | contract/invariant correctness, data integrity, failure semantics, async ordering, idempotency/time behavior, boundary/unit safety, API shape correctness, and cleanup/invalidation correctness. |
+| `security-generic` | all languages | 36-point security checklist across secrets/data exposure, auth/authz, injection classes, SSRF/path handling, crypto, deserialization, resilience-related security failures, and config/supply chain risks. |
+| `redundancy` | all languages | deep redundancy checks: duplicate logic, dead/unreachable code, import/dependency redundancy, redundant computation/data movement, speculative abstraction, reinvented utilities, and debug/review noise. |
+| `performance-scalability` | all languages | complexity hotspots, N+1 and IO amplification, allocation pressure, blocking work in hot paths, and unbounded growth/capacity risks. |
+| `reliability-resilience` | all languages | timeout/cancellation propagation, retry/backoff correctness, idempotency under retries/replays, graceful degradation, and failure containment/recovery safety. |
+| `api-contract-compatibility` | all languages | API compatibility and protocol semantics: backward-compat behavior, versioning/deprecation safety, HTTP method/status correctness, and stable machine-readable error contracts. |
+| `testing-quality` | all languages | missing test coverage for changed behavior, edge/negative/concurrency testing gaps, flaky test risks, and assertion quality. |
+| `observability-operability` | all languages | golden signal coverage, structured/correlated telemetry, alert actionability, rollout operability, and production-debug readiness. |
+| `maintainability-design` | all languages | module boundaries, coupling/cohesion quality, cognitive complexity control, and long-term maintainability design risks. |
+| `accessibility-i18n` | projects with `frontend-ui` pattern | keyboard/focus semantics, assistive labeling and structure, interaction inclusivity, and localization/globalization readiness. |
 
 ## Development
 
@@ -250,9 +264,9 @@ npm start         # start the MCP server
 
 ## Architecture
 
-The server is purely deterministic -- it makes zero model calls. It gathers context via local git commands, detects the project stack through heuristics, filters relevant skills, and assembles a single structured prompt. The IDE's model executes the skill tracks and produces the final report.
+The server is purely deterministic -- it makes zero model calls. It gathers context via local git commands, detects the project stack through heuristics, filters relevant skills, and assembles a single structured prompt. The assembled prompt includes one shared changed-file payload section and multiple checklist-focused skill tracks. The IDE's model executes the tracks and produces the final report.
 
-This design sends the diff context exactly once to the model, minimizing token usage.
+This design sends changed-file payload once for all tracks, reducing redundant prompt tokens as track count grows.
 
 ### Prompt-injection hardening
 
