@@ -107,7 +107,25 @@ Branch name is always required -- no defaulting to current branch, to prevent ac
 ```
 @pr_review branch: feature/login
 @pr_review branch: fix/JIRA-1234-payment-null-check
+@pr_review branch: java21-upgrade reviewInstructions: Focus on upgrade regressions, test execution coverage, and config compatibility.
 ```
+
+`reviewInstructions` is an optional trusted channel for reviewer focus.
+Use it to add priorities, but required track execution and final report contract rules still apply.
+Keep it concise (max 2000 characters).
+
+### 5. Troubleshooting prompt changes
+
+If prompt behavior does not reflect recent code changes:
+
+1. Rebuild the server:
+
+```bash
+npm run build
+```
+
+2. Restart the MCP server process from your IDE so it reloads `dist/index.js`.
+3. Re-run `@pr_review` and confirm updated sections are present in the returned prompt.
 
 ## Adding a new skill
 
@@ -315,10 +333,11 @@ This design sends changed-file payload once for all tracks, reducing redundant p
 
 Diff content is untrusted -- a malicious PR could contain text designed to override review instructions. The assembled prompt mitigates this with:
 
-- **Untrusted-content sentinels** (`<<<UNTRUSTED_DIFF_BEGIN>>>` / `<<<UNTRUSTED_DIFF_END>>>`) wrapping all diff and file payloads in every skill track.
+- **Untrusted-content sentinels** (`<<<UNTRUSTED_DIFF_BEGIN>>>` / `<<<UNTRUSTED_DIFF_END>>>`) wrapping diff and file payloads inside the shared changed-files section.
 - **Sentinel-collision escaping** so diff content cannot break out of the untrusted region.
 - **Explicit trust boundary preamble** instructing the model to ignore any instructions, role changes, or "ignore previous" directives appearing inside untrusted regions.
 - **Path sanitization** stripping control characters from file paths before interpolating them into the prompt structure.
+- **Trusted reviewer focus channel** via `pr_review.reviewInstructions`, which is added in the trusted prompt section (never sourced from diff content).
 
 ## Future change checklist
 

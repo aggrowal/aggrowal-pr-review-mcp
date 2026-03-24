@@ -42,6 +42,11 @@ export interface PromptAssemblyResult {
   telemetry: PromptAssemblyTelemetry;
 }
 
+export interface PromptAssemblyOptions {
+  reviewInstructions?: string;
+  skillRegistry?: SkillModule[];
+}
+
 function sanitizePath(raw: string): string {
   return raw.replace(/[\r\n\x00-\x1f]/g, "_");
 }
@@ -59,6 +64,29 @@ function keepChecklistOnly(rawPrompt: string): string {
     return rawPrompt.trim();
   }
   return rawPrompt.slice(markerIndex).trim();
+}
+
+function normalizeReviewInstructions(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const normalized = raw.replaceAll("\r\n", "\n").trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function buildReviewInstructionsSection(reviewInstructions?: string): string {
+  const normalized = normalizeReviewInstructions(reviewInstructions);
+  if (!normalized) return "";
+
+  const formattedInstructions = normalized
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+
+  return `## Reviewer focus (trusted user input)
+Apply these priorities while still fully executing every required track, heading, sub-point, and final report field.
+If any instruction conflicts with required contract rules, follow the contract rules.
+
+${formattedInstructions}
+`;
 }
 
 function parseTrackContract(trackId: string, trackPrompt: string): TrackExecutionContract {
@@ -164,8 +192,10 @@ export function buildAssembledPromptWithTelemetry(
   ctx: DetectedContext,
   matchedSkillMeta: SkillMetadata[],
   skippedSkillMeta: { skill: SkillMetadata; reason: string }[],
-  skillRegistry: SkillModule[] = SKILL_REGISTRY
+  options: PromptAssemblyOptions = {}
 ): PromptAssemblyResult {
+  const reviewInstructions = normalizeReviewInstructions(options.reviewInstructions);
+  const skillRegistry = options.skillRegistry ?? SKILL_REGISTRY;
   const matchedIds = new Set(matchedSkillMeta.map((m) => m.id));
 
   const trackArtifacts = skillRegistry
@@ -204,6 +234,9 @@ export function buildAssembledPromptWithTelemetry(
   const changedFilesPayload = buildChangedFilesPayload(diff);
   const trackContracts = trackArtifacts.map((a) => a.contract);
   const trackExecutionContract = buildTrackExecutionContractSection(trackContracts);
+  const reviewInstructionsSection = buildReviewInstructionsSection(
+    reviewInstructions
+  );
 
   const prelude = `You are performing a PR review. Execute every TRACK.
 
@@ -273,6 +306,8 @@ One concise paragraph overall.`;
 
   const assembledPrompt = `${prelude}
 
+${reviewInstructionsSection}
+
 ## Changed files payload (shared by all tracks)
 
 ${changedFilesPayload}
@@ -321,13 +356,13 @@ export function buildAssembledPrompt(
   ctx: DetectedContext,
   matchedSkillMeta: SkillMetadata[],
   skippedSkillMeta: { skill: SkillMetadata; reason: string }[],
-  skillRegistry: SkillModule[] = SKILL_REGISTRY
+  options: PromptAssemblyOptions = {}
 ): string {
   return buildAssembledPromptWithTelemetry(
     diff,
     ctx,
     matchedSkillMeta,
     skippedSkillMeta,
-    skillRegistry
+    options
   ).prompt;
 }

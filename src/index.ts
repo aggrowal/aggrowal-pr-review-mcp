@@ -131,7 +131,7 @@ server.tool(
 server.tool(
   "pr_review",
   "Run a full PR review on a specified branch. " +
-    "Usage: @pr_review branch: feature/my-branch",
+    "Usage: @pr_review branch: feature/my-branch [reviewInstructions: focus areas]",
   {
     branch: z
       .string()
@@ -144,9 +144,21 @@ server.tool(
         "Working directory to run from. Defaults to process.cwd(). " +
           "Most IDEs inject this automatically."
       ),
+    reviewInstructions: z
+      .string()
+      .trim()
+      .max(2000)
+      .optional()
+      .describe(
+        "Optional trusted reviewer focus/instructions to include in prompt assembly (max 2000 chars)."
+      ),
   },
-  async ({ branch, cwd: cwdArg }) => {
+  async ({ branch, cwd: cwdArg, reviewInstructions }) => {
     const cwd = cwdArg ?? process.cwd();
+    const trustedReviewInstructions =
+      reviewInstructions && reviewInstructions.length > 0
+        ? reviewInstructions
+        : undefined;
     logger.info(`pr_review: starting`, { branch, cwd });
 
     // T1: Project guard
@@ -234,7 +246,8 @@ server.tool(
       diff,
       detectedCtx,
       matched,
-      skipped
+      skipped,
+      { reviewInstructions: trustedReviewInstructions }
     );
     const assembledPrompt = assembled.prompt;
     const telemetry = assembled.telemetry;
