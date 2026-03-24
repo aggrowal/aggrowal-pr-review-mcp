@@ -11,6 +11,15 @@ export const metadata: SkillMetadata = {
   produces: "redundancy",
 };
 
+const UNTRUSTED_BEGIN = "<<<UNTRUSTED_DIFF_BEGIN>>>";
+const UNTRUSTED_END = "<<<UNTRUSTED_DIFF_END>>>";
+
+function escapeSentinels(raw: string): string {
+  return raw
+    .replaceAll(UNTRUSTED_BEGIN, "<<_UNTRUSTED_DIFF_BEGIN_>>")
+    .replaceAll(UNTRUSTED_END, "<<_UNTRUSTED_DIFF_END_>>");
+}
+
 export function buildPrompt(diff: DiffContext, ctx: DetectedContext): string {
   const fileEntries = diff.files
     .filter((f) => f.status !== "deleted")
@@ -18,10 +27,10 @@ export function buildPrompt(diff: DiffContext, ctx: DetectedContext): string {
       const parts: string[] = [];
       parts.push(`### ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`);
       parts.push("#### Diff");
-      parts.push(`\`\`\`\n${f.diff}\n\`\`\``);
+      parts.push(`${UNTRUSTED_BEGIN}\n${escapeSentinels(f.diff)}\n${UNTRUSTED_END}`);
       if (f.content) {
         parts.push("#### Full file");
-        parts.push(`\`\`\`\n${f.content}\n\`\`\``);
+        parts.push(`${UNTRUSTED_BEGIN}\n${escapeSentinels(f.content)}\n${UNTRUSTED_END}`);
       }
       return parts.join("\n");
     })

@@ -11,12 +11,22 @@ export const metadata: SkillMetadata = {
   produces: "correctness",
 };
 
+const UNTRUSTED_BEGIN = "<<<UNTRUSTED_DIFF_BEGIN>>>";
+const UNTRUSTED_END = "<<<UNTRUSTED_DIFF_END>>>";
+
+function escapeSentinels(raw: string): string {
+  return raw
+    .replaceAll(UNTRUSTED_BEGIN, "<<_UNTRUSTED_DIFF_BEGIN_>>")
+    .replaceAll(UNTRUSTED_END, "<<_UNTRUSTED_DIFF_END_>>");
+}
+
 export function buildPrompt(diff: DiffContext, ctx: DetectedContext): string {
   const fileDiffs = diff.files
     .filter((f) => f.status !== "deleted")
     .map((f) => {
       const header = `### ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`;
-      return `${header}\n\`\`\`\n${f.diff}\n\`\`\``;
+      const safeDiff = escapeSentinels(f.diff);
+      return `${header}\n${UNTRUSTED_BEGIN}\n${safeDiff}\n${UNTRUSTED_END}`;
     })
     .join("\n\n");
 

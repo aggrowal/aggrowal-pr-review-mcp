@@ -116,28 +116,49 @@ describe("Full pipeline integration", () => {
     expect(matched).toHaveLength(3);
     expect(skipped).toHaveLength(0);
 
-    // Build prompt for each matched skill
-    const prompts = SKILL_REGISTRY.filter((s) =>
-      matched.some((m) => m.id === s.metadata.id)
-    ).map((s) => s.buildPrompt(diff, ctx));
+    // Build prompt for each matched skill, keyed by id for position-independence
+    const promptMap = new Map<string, string>();
+    for (const s of SKILL_REGISTRY) {
+      if (matched.some((m) => m.id === s.metadata.id)) {
+        promptMap.set(s.metadata.id, s.buildPrompt(diff, ctx));
+      }
+    }
 
-    // Verify prompts contain the diff content
-    for (const prompt of prompts) {
+    // Verify all prompts contain the diff content
+    for (const prompt of promptMap.values()) {
       expect(prompt).toContain("login.ts");
       expect(prompt).toContain("register.ts");
     }
 
     // Verify correctness prompt checks for the right things
-    expect(prompts[0]).toContain("Logic errors");
-    expect(prompts[0]).toContain("Null / undefined");
+    const correctnessPrompt = promptMap.get("correctness")!;
+    expect(correctnessPrompt).toContain("Logic errors");
+    expect(correctnessPrompt).toContain("Null / undefined");
 
-    // Verify security prompt checks for the right things
-    expect(prompts[1]).toContain("Hardcoded secrets");
-    expect(prompts[1]).toContain("Injection");
+    // Verify security prompt covers expanded checklist categories
+    const securityPrompt = promptMap.get("security-generic")!;
+    expect(securityPrompt).toContain("Hardcoded secrets");
+    expect(securityPrompt).toContain("Injection");
+    expect(securityPrompt).toContain("BOLA / IDOR");
+    expect(securityPrompt).toContain("SSRF");
+    expect(securityPrompt).toContain("Connection and handle leaks");
+    expect(securityPrompt).toContain("Unsafe deserialization");
+    expect(securityPrompt).toContain("JWT and self-contained token");
+    expect(securityPrompt).toContain("Vulnerable or untrusted dependencies");
+
+    // Verify security prompt has untrusted-content hardening
+    expect(securityPrompt).toContain("<<<UNTRUSTED_DIFF_BEGIN>>>");
+    expect(securityPrompt).toContain("<<<UNTRUSTED_DIFF_END>>>");
+    expect(securityPrompt).toContain("Untrusted content policy");
+
+    // Verify all skills use untrusted sentinels (hardening applied across tracks)
+    expect(correctnessPrompt).toContain("<<<UNTRUSTED_DIFF_BEGIN>>>");
+    const redundancyPrompt = promptMap.get("redundancy")!;
+    expect(redundancyPrompt).toContain("<<<UNTRUSTED_DIFF_BEGIN>>>");
 
     // Verify redundancy prompt includes full file content
-    expect(prompts[2]).toContain("Full file");
-    expect(prompts[2]).toContain("Code duplication");
+    expect(redundancyPrompt).toContain("Full file");
+    expect(redundancyPrompt).toContain("Code duplication");
   });
 
   it("handles multi-language projects correctly", () => {

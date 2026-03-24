@@ -236,7 +236,7 @@ At `debug` level, each step additionally logs git commands, raw output, detectio
 | Skill | Runs on | Checks for |
 |---|---|---|
 | `correctness` | all languages | logic errors, edge cases, error handling, async correctness |
-| `security-generic` | all languages | secrets, injection, auth, insecure defaults, weak crypto |
+| `security-generic` | all languages | 36-point checklist: secrets & data exposure, auth/authz (BOLA, BOPLA, function-level, cross-tenant), session/token handling, injection (SQL, NoSQL, command, template, XSS, CRLF), SSRF, path traversal, file upload, crypto, deserialization/XXE, resource lifecycle (connection leaks, unbounded allocation, fail-open), config/supply-chain. Backed by OWASP Top 10, API Top 10, ASVS 5.0, and CWE Top 25. |
 | `redundancy` | all languages | duplication, dead code, unused imports, over-engineering |
 
 ## Development
@@ -253,3 +253,12 @@ npm start         # start the MCP server
 The server is purely deterministic -- it makes zero model calls. It gathers context via local git commands, detects the project stack through heuristics, filters relevant skills, and assembles a single structured prompt. The IDE's model executes the skill tracks and produces the final report.
 
 This design sends the diff context exactly once to the model, minimizing token usage.
+
+### Prompt-injection hardening
+
+Diff content is untrusted -- a malicious PR could contain text designed to override review instructions. The assembled prompt mitigates this with:
+
+- **Untrusted-content sentinels** (`<<<UNTRUSTED_DIFF_BEGIN>>>` / `<<<UNTRUSTED_DIFF_END>>>`) wrapping all diff and file payloads in every skill track.
+- **Sentinel-collision escaping** so diff content cannot break out of the untrusted region.
+- **Explicit trust boundary preamble** instructing the model to ignore any instructions, role changes, or "ignore previous" directives appearing inside untrusted regions.
+- **Path sanitization** stripping control characters from file paths before interpolating them into the prompt structure.
